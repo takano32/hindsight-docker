@@ -23,8 +23,20 @@ services:
       # 埋め込み（コンテナ内の SentenceTransformers、CPU）。
       # Hugging Face の名前（起動時にダウンロードして hf_cache に残る）か、models/fetch.sh で落とした /models/<名前>。
       # ruri-v3 や multilingual-e5 のように接頭辞が要るモデルは /models/ 側（fetch.sh が prompts を書き足す）で指す。
-      HINDSIGHT_API_EMBEDDINGS_PROVIDER: local
+      # local＝コンテナ内の SentenceTransformers。openai＝OpenAI 互換の口（下の ollama サービスなど）
+      HINDSIGHT_API_EMBEDDINGS_PROVIDER: ${HINDSIGHT_API_EMBEDDINGS_PROVIDER:-local}
       HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: ${HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL:-BAAI/bge-m3}
+      # openai のとき（ollama を指す）。鍵は ollama が見ないが、空だと Hindsight が起動を拒むので埋め草
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://ollama:11434/v1}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY:-ollama}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL:-qwen3-embedding:0.6b-q8_0}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE:-16}
+      # 出力次元の切り詰め（MRL 対応モデルのみ。pgvector の HNSW は 2000 次元まで）。空＝モデルの既定
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS:-}
+      # 接頭辞。openai／tei 系にだけ効く（local はモデル同梱の prompts を使う）。
+      # Qwen3-Embedding は問いだけ「Instruct: <task>\nQuery:」、embeddinggemma は問い「task: search result | query: 」文書「title: none | text: 」
+      HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX: ${HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX:-}
+      HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX: ${HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX:-}
       # 意味検索の足切り（コサイン類似度）。既定 0.3 は bge-m3 の尺度。ruri-v3 は無関係な文でも 0.7 台を出すので、
       # ruri-v3 を使うなら 0.78 前後に上げないと全件が候補に入り、順位融合（RRF）で全文検索の雑音に負ける（README）
       HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY: ${HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY:-0.3}
@@ -48,12 +60,38 @@ services:
       - ./models:/models:ro
     networks:
       - postgresql
+      - default          # ollama と話す内部 network（下）
     # 箱のほかのサービスを守る安全弁（bge-m3 は fp32 で約 2.3GB をメモリに載せる）
     mem_limit: 6g
+
+  # 量子化した埋め込みモデル（GGUF）を動かす ollama。公式イメージ ollama/ollama、版は .env の OLLAMA_VERSION。
+  # Hindsight からは openai プロバイダ（OpenAI 互換 /v1/embeddings）で http://ollama:11434/v1 を指す。
+  # profile `ollama` で切り替え: COMPOSE_PROFILES=ollama docker compose up -d（.env に書いてもよい）。
+  # 既定（profile なし）では上がらず、Hindsight はコンテナ内の local（SentenceTransformers）で埋め込む。
+  ollama:
+    image: ollama/ollama:${OLLAMA_VERSION:-0.40.5}
+    container_name: ollama
+    profiles: ["ollama"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"   # ホストからの確認用（curl、ollama pull は exec で足りる）。外には開けない
+    environment:
+      # 使わないモデルをメモリから下ろすまでの時間。-1＝下ろさない（recall のたびに読み直さないよう常駐）
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - ollama:/root/.ollama    # 落としたモデル（hindsight_ollama）。-v を付けなければ残る
+    networks:
+      - default
+    mem_limit: 3g
 
 networks:
   postgresql:
     external: true
+  default:
+    # hindsight と ollama だけの内部 network（hindsight_default）。ほかの compose からは参照しない
 
 volumes:
   hf_cache:
+  ollama:

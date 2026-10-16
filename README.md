@@ -23,6 +23,59 @@ docker compose down                  # -v を付けなければモデルのキ�
   Claude Code に足すなら `claude mcp add --transport http hindsight http://127.0.0.1:8888/mcp/<bank>/`。
 - モデルのキャッシュは名前付きボリューム `hindsight_hf_cache`（コンテナ内 `/home/hindsight/.cache/huggingface`）。
 
+## 量子化した埋め込みモデルを ollama で動かす（profile `ollama`）
+
+同じ compose に [ollama](https://github.com/ollama/ollama) の公式イメージを2つ目のサービスとして置いてある（版は `.env` の `OLLAMA_VERSION`、既定 0.40.5、arm64 あり）。
+GGUF の量子化モデル（Q8_0 など）を動かし、Hindsight は `openai` プロバイダ（OpenAI 互換 `/v1/embeddings`）で `http://ollama:11434/v1` を指す。
+2つは hindsight と ollama だけの内部 network（`hindsight_default`）で話す。ollama のポートはホストの `127.0.0.1:11434` だけに出している（確認用。外には開けない）。
+
+```sh
+# .env に
+#   COMPOSE_PROFILES=ollama
+#   HINDSIGHT_API_EMBEDDINGS_PROVIDER=openai
+#   HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL=embeddinggemma:300m-qat-q8_0
+#   HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX=task: search result | query: 
+#   HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX=title: none | text: 
+docker compose up -d ollama
+docker compose exec ollama ollama pull embeddinggemma:300m-qat-q8_0     # 338MB、この箱で 69 秒。Gemma の同意手続きは要らなかった
+docker compose up -d                                                    # hindsight が ollama に繋ぐ
+curl -s http://127.0.0.1:8888/health
+```
+
+- **profile にしてある理由**＝ollama を使わない構成（`local`）のときに空のコンテナを上げないため。使うときは `.env` の `COMPOSE_PROFILES=ollama` で常に一緒に上がる。
+- モデルは名前付きボリューム `hindsight_ollama`（コンテナ内 `/root/.ollama`）。`down` に `-v` を付けなければ残る。要らないモデルは `docker compose exec ollama ollama rm <タグ>`。
+- `OLLAMA_KEEP_ALIVE` は既定 `-1`（モデルを下ろさない）。下ろすと次の recall で読み直し（embeddinggemma Q8 で 2 秒、Qwen3 0.6B Q8 で 2 秒、4B Q4 で数十秒）が挟まる。
+- 接頭辞は `openai` プロバイダに効く（`local` には効かない）。モデルのカードが求める形をそのまま入れる。
+  Qwen3-Embedding は問いだけ `Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:`（改行を含む。compose の文字列で `\n` と書く）。
+- 次元が pgvector の HNSW 上限 2000 を超えるモデル（Qwen3-Embedding-4B の 2560 など）は `HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS` で MRL の切り詰めを頼める（ollama 0.40.5 の `/v1/embeddings` は `dimensions` を受けた。切り詰めた質はモデルのカードを見る）。
+- ollama 側の鍵は使われない。`HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY` の既定 `ollama` は Hindsight の起動時検査を通すための埋め草。
+
+### 計測（2026-10-16、この箱、LLM なし、リランカー rrf、自作 36 文・関係ある問い 42 本＋難しい 26 本）
+
+最終1位＝Hindsight が返した順位で狙った文が1位だった率（基本／難しい）、意味1位＝意味スコアだけで並べたときの1位率、
+recall は1問の中央値、メモリは待機時の hindsight＋ollama（`docker stats`）、DL はこの回線（約 5MB/秒）での pull。
+
+| モデル（ollama のタグ） | 接頭辞 | 最終1位 | 意味1位 | recall | メモリ | 容量 | DL |
+|---|---|---|---|---|---|---|---|
+| `embeddinggemma:300m-qat-q8_0` | あり | **100% / 92%** | 100% / 96% | **0.06s** | 358+627 MiB | 338MB | 69s |
+| 同（接頭辞なし） | なし | 98% / 85% | 98% / 92% | 0.06s | 304+626 | | |
+| `embeddinggemma:300m`（bf16） | あり | 100% / 92% | 100% / 96% | 0.65s | 356+689 | 621MB | 105s |
+| `qwen3-embedding:0.6b-q8_0` | 問いに Instruct | 98% / 88% | 98% / 96% | 0.21s | 357+1158 | 639MB | 109s |
+| 同（接頭辞なし） | なし | 95% / 81% | 95% / 96% | 0.10s | 304+1162 | | |
+| `qwen3-embedding:4b`（Q4_K_M、1024 次元に切り詰め） | 問いに Instruct | 95% / 85% | 100% / 96% | 1.74s | 345+3090 | 2.5GB | 527s |
+| `bge-m3:567m`（f16） | なし | 83% / 69% | 98% / 96% | 0.13s | 304+1332 | 1.2GB | 197s |
+| `snowflake-arctic-embed2:568m` | 問いに `query: ` | 95% / 81% | 93% / 81% | 0.14s | 304+1333 | 1.2GB | 197s |
+| `nomic-embed-text-v2-moe` | `search_query: `／`search_document: ` | 95% / 88% | 93% / 81% | 0.10s | 304+1137 | 958MB | 163s |
+| `paraphrase-multilingual:278m` | なし | 93% / 73% | 86% / 77% | 0.06s | 304+746 | 563MB | 97s |
+| `granite-embedding:278m` | なし | 43% / 31% | 93% / 88% | 0.07s | 304+747 | 563MB | 98s |
+| `embeddinggemma-2:270m-q8_0-text` | あり | 45% / 27% | 98% / 100% | 0.08s | 304+481 | 303MB | 53s |
+| 同＋足切り 0.66 | あり | 90% / 69% | 95% / 100% | 0.08s | 304+488 | | |
+
+- bge-m3 は `local`（fp32、待機 2.4GiB、recall 0.5s）で測った前日の値と最終1位率が同じ（83%／69%）で、ollama 経由でも順位は変わらず、メモリと速さだけ良くなった。
+- granite と embeddinggemma-2 は意味の順位は良いのにスコアが 0.6〜0.7 台に詰まり、既定の足切り 0.3 だと全件が候補に入って RRF で負ける（ruri-v3 と同じ型）。embeddinggemma-2 は 0.66 で 90% まで戻るが、関係ある文の最小 0.69 と無関係の問いの1位の最大 0.67 が接していて薄氷。
+- Qwen3-Embedding の 4B は 2 vCPU では1問 1.7 秒で、順位も 0.6B の Q8 を超えなかった。載せるなら ollama の `mem_limit` を 4g に上げる（読み込みで 3.1GiB）。8B（Q4_K_M で 4.7GB）は箱のメモリの線（MemAvailable 1.5GB）に収まらないので測っていない。
+- 生データ（bench.json）は当日の scratchpad。前日の `local` 版（ruri-v3、Qwen3 float32 など）の数字は nilkani06 の `.agents/skills/hindsight/SKILL.md`。
+
 ## 設定（.env）
 
 | 変数 | 意味 | いまの値 |
@@ -33,6 +86,14 @@ docker compose down                  # -v を付けなければモデルのキ�
 | `HINDSIGHT_API_RERANKER_PROVIDER` | 融合後の並べ替え。`rrf` は並べ替えなし（モデルを読まない）。`local` の既定モデルは英語専用 | `rrf` |
 | `HINDSIGHT_API_RERANKER_LOCAL_MODEL` | `local` のときのモデル。Hindsight 既定の `cross-encoder/ms-marco-MiniLM-L-6-v2` は英語専用で日本語の順位を壊す。多言語は `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`（約 470MB、recall が 0.13 秒→1.0 秒） | Hindsight 既定 |
 | `HINDSIGHT_ENABLE_CP` | 管理 UI（port 9999） | `true` |
+| `COMPOSE_PROFILES` | `ollama` を書くと ollama サービスも一緒に上がる | （なし） |
+| `OLLAMA_VERSION` | ollama イメージのタグ | `0.40.5` |
+| `OLLAMA_KEEP_ALIVE` | ollama がモデルをメモリから下ろすまでの時間。`-1` は下ろさない | `-1` |
+| `HINDSIGHT_API_EMBEDDINGS_PROVIDER` | `local`（コンテナ内 SentenceTransformers）か `openai`（OpenAI 互換の口＝ollama） | `local` |
+| `HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL` | `openai` のときの口 | `http://ollama:11434/v1` |
+| `HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL` | `openai` のときのモデル（ollama のタグ） | `qwen3-embedding:0.6b-q8_0` |
+| `HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS` | 出力次元の切り詰め（MRL 対応モデルのみ） | （なし＝モデルの既定） |
+| `HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX`／`PASSAGE_PREFIX` | 問い／文書の接頭辞（`openai`・`tei` 系にだけ効く） | （空） |
 
 埋め込みモデルを次元の違うものに替えるときは、データが入ったままだと起動時に止まる（列の型を変えられない）。
 空にするか、export-bank して入れ直す。
