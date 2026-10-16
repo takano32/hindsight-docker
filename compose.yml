@@ -20,9 +20,14 @@ services:
       # 書き込み時の LLM。none＝抽出なし（原文の塊だけ保存、API キー不要）
       HINDSIGHT_API_LLM_PROVIDER: ${HINDSIGHT_API_LLM_PROVIDER:-none}
 
-      # 埋め込み（コンテナ内の SentenceTransformers、CPU）
+      # 埋め込み（コンテナ内の SentenceTransformers、CPU）。
+      # Hugging Face の名前（起動時にダウンロードして hf_cache に残る）か、models/fetch.sh で落とした /models/<名前>。
+      # ruri-v3 や multilingual-e5 のように接頭辞が要るモデルは /models/ 側（fetch.sh が prompts を書き足す）で指す。
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: local
       HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: ${HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL:-BAAI/bge-m3}
+      # 意味検索の足切り（コサイン類似度）。既定 0.3 は bge-m3 の尺度。ruri-v3 は無関係な文でも 0.7 台を出すので、
+      # ruri-v3 を使うなら 0.78 前後に上げないと全件が候補に入り、順位融合（RRF）で全文検索の雑音に負ける（README）
+      HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY: ${HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY:-0.3}
       # 初回はモデルのダウンロード（bge-m3 は約 2.3GB）が起動に含まれるので長めに
       HINDSIGHT_API_MODEL_INIT_TIMEOUT: "1800"
 
@@ -30,12 +35,17 @@ services:
       # 既定の local は英語専用の cross-encoder/ms-marco-MiniLM-L-6-v2。多言語にするなら local にして
       # HINDSIGHT_API_RERANKER_LOCAL_MODEL=BAAI/bge-reranker-v2-m3（約 2.3GB）などを足す
       HINDSIGHT_API_RERANKER_PROVIDER: ${HINDSIGHT_API_RERANKER_PROVIDER:-rrf}
+      # local のときのモデル。Hindsight の既定 cross-encoder/ms-marco-MiniLM-L-6-v2 は英語専用で、日本語では順位を壊す
+      # （2026-10-16 の計測：ruri-v3-130m で最終1位率 90%→36%）。多言語なら cross-encoder/mmarco-mMiniLMv2-L12-H384-v1 など
+      HINDSIGHT_API_RERANKER_LOCAL_MODEL: ${HINDSIGHT_API_RERANKER_LOCAL_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
 
       # 管理 UI（port 9999）
       HINDSIGHT_ENABLE_CP: ${HINDSIGHT_ENABLE_CP:-true}
     volumes:
       # Hugging Face のモデルキャッシュ。イメージに焼いてある既定モデルは初回に写され、追加のモデルもここに残る
       - hf_cache:/home/hindsight/.cache/huggingface
+      # models/fetch.sh で落としたモデル（接頭辞の設定を足したもの）。読み取り専用。無ければ空のまま
+      - ./models:/models:ro
     networks:
       - postgresql
     # 箱のほかのサービスを守る安全弁（bge-m3 は fp32 で約 2.3GB をメモリに載せる）
