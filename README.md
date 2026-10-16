@@ -6,7 +6,7 @@
 ## 前提
 
 - `~/opt/postgresql-docker` が `up` していること（network `postgresql` と、hindsight のロールとデータベース）。
-- `~/opt/llama-cpp-docker` が `up` していること（network `llama-cpp`。埋め込みを `local` で動かすときも、compose が network を参照するので要る）。
+- `~/opt/ollama-docker` が `up` していること（network `ollama`。埋め込みを `local` で動かすときも、compose が network を参照するので要る）。
 - `.env`（chmod 600）の `HINDSIGHT_DB_PASSWORD` が postgresql-docker の `.env` と同じ値。
 
 ## 使い方
@@ -24,34 +24,37 @@ docker compose down                  # -v を付けなければモデルのキ�
   Claude Code に足すなら `claude mcp add --transport http hindsight http://127.0.0.1:8888/mcp/<bank>/`。
 - モデルのキャッシュは名前付きボリューム `hindsight_hf_cache`（コンテナ内 `/home/hindsight/.cache/huggingface`）。
 
-## 量子化した埋め込みモデルを llama-server で動かす
+## 量子化した埋め込みモデルを ollama で動かす
 
-llama-server（llama.cpp）は [llama-cpp-docker](https://github.com/takano32/llama-cpp-docker)（箱に1台の共有 llama.cpp）に置いてある。
-GGUF の量子化モデル（Q8_0 など）をそこの埋め込み用サービス `llama-embed` で動かし、Hindsight は `openai` プロバイダ（OpenAI 互換 `/v1/embeddings`）で
-`http://llama-embed:8080/v1` を指す（external network `llama-cpp`、ホスト名 `llama-embed`）。compose の既定がこの向き。
-モデル（既定 embeddinggemma 300m QAT Q8_0、名前 `embeddinggemma`）・版・メモリ上限は llama-cpp-docker の `.env` で決める。
+ollama は [ollama-docker](https://github.com/takano32/ollama-docker)（箱に1台の共有 ollama）に置いてある。
+GGUF の量子化モデル（Q8_0 など）をそこで動かし、Hindsight は `openai` プロバイダ（OpenAI 互換 `/v1/embeddings`）で
+`http://ollama:11434/v1` を指す（external network `ollama`、ホスト名 `ollama`）。compose の既定がこの向き。
+版・同時に載せるモデル数・メモリ上限は ollama-docker の `.env` で決める。
 
 ```sh
 # hindsight-docker の .env に
 #   HINDSIGHT_API_EMBEDDINGS_PROVIDER=openai
-#   HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL=embeddinggemma
+#   HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL=embeddinggemma:300m-qat-q8_0
 #   HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX=task: search result | query: 
 #   HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX=title: none | text: 
-(cd ~/opt/llama-cpp-docker && docker compose up -d embed)   # 初回は Hugging Face から GGUF（313MB）を落とす
-docker compose up -d                                          # hindsight が llama-embed に繋ぐ
+#   HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY=0.3    # ollama の尺度では既定の 0.3 のまま（llama-server なら 0.43）
+(cd ~/opt/ollama-docker && docker compose up -d && docker compose exec ollama ollama pull embeddinggemma:300m-qat-q8_0)   # 初回は 338MB
+docker compose up -d                                          # hindsight が ollama に繋ぐ
 curl -s http://127.0.0.1:8888/health
 ```
 
-- 2026-10-16 の昼までは同じ compose に2つ目のサービス（profile `ollama`）として置き、夕方に ollama-docker へ分け、夜に ollama をやめて llama-cpp-docker に替えた
-  （ollama のイメージ 7GB に対して llama.cpp の server イメージは 1.2GB。順位は下の表のとおり同じ）。
+- 2026-10-16 の昼までは同じ compose に2つ目のサービス（profile `ollama`）として置き、夕方に ollama-docker へ分け、
+  夜にいちど ollama をやめて [llama-cpp-docker](https://github.com/takano32/llama-cpp-docker)（llama-server 2本）に替え、
+  同じ夜のうちに ollama へ戻した（llama-server は1プロセス1モデルで埋め込みと LLM の2本立てになり、ollama の1つの口で2つのモデルを扱える手軽さを取った。
+  llama-server のときの数字は経緯として下の表に残す）。
 - 接頭辞は `openai` プロバイダに効く（`local` には効かない）。モデルのカードが求める形をそのまま入れる。
   Qwen3-Embedding は問いだけ `Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:`（改行を含む。compose の文字列で `\n` と書く）。
 - 次元が pgvector の HNSW 上限 2000 を超えるモデル（Qwen3-Embedding-4B の 2560 など）は `HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS` で MRL の切り詰めを頼める（ollama 0.40.5 の `/v1/embeddings` は `dimensions` を受けた。llama-server で受けるかは確かめていない。切り詰めた質はモデルのカードを見る）。
-- llama-server 側の鍵は使われない。`HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY` の既定 `none` は Hindsight の起動時検査を通すための埋め草。
+- ollama 側の鍵は使われない。`HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY` の既定 `none` は Hindsight の起動時検査を通すための埋め草。
 
 ### 計測（2026-10-16、この箱、LLM なし、リランカー rrf、自作 36 文・関係ある問い 42 本＋難しい 26 本）
 
-最初の表は ollama 0.40.5 経由（同日の夕方。ollama はもう箱に無い）。llama-server（build 11681）経由で同じ試験をやり直した行は、その下の表。
+最初の表は ollama 0.40.5 経由（同日の夕方。いまの構成はこちら）。llama-server（build 11681）経由で同じ試験をやり直した行は、その下の表（同日の夜、いまは使っていない）。
 
 最終1位＝Hindsight が返した順位で狙った文が1位だった率（基本／難しい）、意味1位＝意味スコアだけで並べたときの1位率、
 recall は1問の中央値、メモリは待機時の hindsight＋ollama（`docker stats`）、DL はこの回線（約 5MB/秒）での pull。
@@ -72,7 +75,7 @@ recall は1問の中央値、メモリは待機時の hindsight＋ollama（`dock
 | `embeddinggemma-2:270m-q8_0-text` | あり | 45% / 27% | 98% / 100% | 0.08s | 304+481 | 303MB | 53s |
 | 同＋足切り 0.66 | あり | 90% / 69% | 95% / 100% | 0.08s | 304+488 | | |
 
-#### llama-server 経由（同日の夜、llama-cpp-docker、build 11681）
+#### llama-server 経由（同日の夜、llama-cpp-docker、build 11681。経緯として残す。いまは ollama に戻している）
 
 同じ試験を llama-server で。モデルは同じ元のチェックポイント（`ggml-org/embeddinggemma-300m-qat-q8_0-GGUF`、313MB、768 次元、mean pooling）。メモリは hindsight＋llama-embed。
 
@@ -85,7 +88,7 @@ recall は1問の中央値、メモリは待機時の hindsight＋ollama（`dock
   理由はスコアの尺度の違いで、同じ文の組でもコサイン類似度が ollama より一律に 0.1 ほど高く出る
   （関係ある文の最小が 0.32→0.44、中央値 0.46→0.59、無関係な問いの1位の最大が 0.3 未満→0.43）。0.3 のままだと無関係な文が全部候補に入り、RRF で全文検索の雑音に負ける（ruri-v3 と同じ型）。
   **llama-server で embeddinggemma を使うなら `HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY=0.43`**。関係ある文の最小 0.44 と無関係の1位の最大 0.43 が接していて余裕は薄い。
-- 尺度が違う理由は確かめていない（`--pooling` を外しても値は同じだったので pooling ではない。ollama 側の GGUF の作り〈プーリング後の dense 層の有無など〉の違いを疑っているが、ollama はもう箱に無い）。
+- 尺度が違う理由は確かめていない（`--pooling` を外しても値は同じだったので pooling ではない。ollama 側の GGUF の作り〈プーリング後の dense 層の有無など〉の違いを疑っている）。
 - ollama 版（`embeddinggemma:300m-qat-q8_0`、待機 627MiB）より llama-embed（371MiB）はメモリが 256MiB 少ない。recall と retain の速さは同じ。
 
 - bge-m3 は `local`（fp32、待機 2.4GiB、recall 0.5s）で測った前日の値と最終1位率が同じ（83%／69%）で、ollama 経由でも順位は変わらず、メモリと速さだけ良くなった。
@@ -99,13 +102,13 @@ recall は1問の中央値、メモリは待機時の hindsight＋ollama（`dock
 |---|---|---|
 | `HINDSIGHT_API_LLM_PROVIDER` | 書き込み時の LLM。`none` は抽出なし（原文の塊を保存、API キー不要） | `none` |
 | `HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL` | 埋め込みモデル。Hugging Face の名前か `/models/<名前>`（下の「日本語向けの埋め込みモデル」）。Hindsight 既定の `BAAI/bge-small-en-v1.5` は英語専用 | `BAAI/bge-m3`（候補は `/models/ruri-v3-130m`） |
-| `HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY` | 意味検索の足切り（コサイン類似度）。モデルの尺度に合わせる。bge-m3 は 0.3、ruri-v3 は 0.78 前後、llama-server の embeddinggemma は 0.43 | `0.3` |
+| `HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY` | 意味検索の足切り（コサイン類似度）。モデルの尺度に合わせる。bge-m3 は 0.3、ollama の embeddinggemma も 0.3、ruri-v3 は 0.78 前後、llama-server の embeddinggemma は 0.43 | `0.3` |
 | `HINDSIGHT_API_RERANKER_PROVIDER` | 融合後の並べ替え。`rrf` は並べ替えなし（モデルを読まない）。`local` の既定モデルは英語専用 | `rrf` |
 | `HINDSIGHT_API_RERANKER_LOCAL_MODEL` | `local` のときのモデル。Hindsight 既定の `cross-encoder/ms-marco-MiniLM-L-6-v2` は英語専用で日本語の順位を壊す。多言語は `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`（約 470MB、recall が 0.13 秒→1.0 秒） | Hindsight 既定 |
 | `HINDSIGHT_ENABLE_CP` | 管理 UI（port 9999） | `true` |
-| `HINDSIGHT_API_EMBEDDINGS_PROVIDER` | `local`（コンテナ内 SentenceTransformers）か `openai`（OpenAI 互換の口＝llama-cpp-docker） | `local` |
-| `HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL` | `openai` のときの口 | `http://llama-embed:8080/v1` |
-| `HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL` | `openai` のときのモデル（llama-server の `--alias`） | `embeddinggemma` |
+| `HINDSIGHT_API_EMBEDDINGS_PROVIDER` | `local`（コンテナ内 SentenceTransformers）か `openai`（OpenAI 互換の口＝ollama-docker） | `local` |
+| `HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL` | `openai` のときの口 | `http://ollama:11434/v1` |
+| `HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL` | `openai` のときのモデル（ollama のタグ） | `embeddinggemma:300m-qat-q8_0` |
 | `HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS` | 出力次元の切り詰め（MRL 対応モデルのみ） | （なし＝モデルの既定） |
 | `HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX`／`PASSAGE_PREFIX` | 問い／文書の接頭辞（`openai`・`tei` 系にだけ効く） | （空） |
 

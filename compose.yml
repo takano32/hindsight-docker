@@ -1,6 +1,6 @@
 # Hindsight（ghcr.io/vectorize-io/hindsight の公式イメージ、版は .env の HINDSIGHT_VERSION）。
 # DB は同梱せず、postgresql-docker の共有 PostgreSQL（external network `postgresql`、ホスト名 `postgresql`）に繋ぐ。
-# 量子化した埋め込みモデルは llama-cpp-docker の共有 llama-server（external network `llama-cpp`、ホスト名 `llama-embed`）に繋ぐ。
+# 量子化した埋め込みモデルは ollama-docker の共有 ollama（external network `ollama`、ホスト名 `ollama`）に繋ぐ。
 # 本家リポジトリは改変しない。
 name: hindsight
 
@@ -24,14 +24,14 @@ services:
       # 埋め込み（コンテナ内の SentenceTransformers、CPU）。
       # Hugging Face の名前（起動時にダウンロードして hf_cache に残る）か、models/fetch.sh で落とした /models/<名前>。
       # ruri-v3 や multilingual-e5 のように接頭辞が要るモデルは /models/ 側（fetch.sh が prompts を書き足す）で指す。
-      # local＝コンテナ内の SentenceTransformers。openai＝OpenAI 互換の口（共有の llama-cpp-docker など）
+      # local＝コンテナ内の SentenceTransformers。openai＝OpenAI 互換の口（共有の ollama-docker など）
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: ${HINDSIGHT_API_EMBEDDINGS_PROVIDER:-local}
       HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: ${HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL:-BAAI/bge-m3}
-      # openai のとき（llama-cpp-docker の埋め込み用 llama-server を指す。external network `llama-cpp`、ホスト名 `llama-embed`）。
-      # 鍵は llama-server が見ないが、空だと Hindsight が起動を拒むので埋め草。モデル名は llama-server の --alias（既定 embeddinggemma）
-      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://llama-embed:8080/v1}
+      # openai のとき（ollama-docker の共有 ollama を指す。external network `ollama`、ホスト名 `ollama`）。
+      # 鍵は ollama が見ないが、空だと Hindsight が起動を拒むので埋め草。モデル名は ollama のタグ（既定 embeddinggemma:300m-qat-q8_0、ollama pull 済みのもの）
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://ollama:11434/v1}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY:-none}
-      HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL:-embeddinggemma}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL:-embeddinggemma:300m-qat-q8_0}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE:-16}
       # 出力次元の切り詰め（MRL 対応モデルのみ。pgvector の HNSW は 2000 次元まで）。空＝モデルの既定
       HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS:-}
@@ -39,8 +39,9 @@ services:
       # Qwen3-Embedding は問いだけ「Instruct: <task>\nQuery:」、embeddinggemma は問い「task: search result | query: 」文書「title: none | text: 」
       HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX: ${HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX:-}
       HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX: ${HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX:-}
-      # 意味検索の足切り（コサイン類似度）。既定 0.3 は bge-m3 の尺度。ruri-v3 は無関係な文でも 0.7 台を出すので、
-      # ruri-v3 を使うなら 0.78 前後に上げないと全件が候補に入り、順位融合（RRF）で全文検索の雑音に負ける（README）
+      # 意味検索の足切り（コサイン類似度）。既定 0.3 は bge-m3 の尺度で、ollama の embeddinggemma:300m-qat-q8_0 も 0.3 でよい（README の計測）。
+      # ruri-v3 は無関係な文でも 0.7 台を出すので 0.78 前後、llama-server 経由の embeddinggemma は尺度が一律 0.1 高いので 0.43 に
+      # 上げないと全件が候補に入り、順位融合（RRF）で全文検索の雑音に負ける（README）
       HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY: ${HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY:-0.3}
       # 初回はモデルのダウンロード（bge-m3 は約 2.3GB）が起動に含まれるので長めに
       HINDSIGHT_API_MODEL_INIT_TIMEOUT: "1800"
@@ -62,14 +63,14 @@ services:
       - ./models:/models:ro
     networks:
       - postgresql
-      - llama-cpp        # llama-cpp-docker の共有 llama-server（external network `llama-cpp`）
+      - ollama           # ollama-docker の共有 ollama（external network `ollama`）
     # 箱のほかのサービスを守る安全弁（bge-m3 は fp32 で約 2.3GB をメモリに載せる）
     mem_limit: 6g
 
 networks:
   postgresql:
     external: true
-  llama-cpp:
+  ollama:
     external: true
 
 volumes:
