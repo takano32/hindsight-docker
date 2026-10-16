@@ -1,5 +1,6 @@
 # Hindsight（ghcr.io/vectorize-io/hindsight の公式イメージ、版は .env の HINDSIGHT_VERSION）。
 # DB は同梱せず、postgresql-docker の共有 PostgreSQL（external network `postgresql`、ホスト名 `postgresql`）に繋ぐ。
+# 量子化した埋め込みモデルは ollama-docker の共有 ollama（external network `ollama`、ホスト名 `ollama`）に繋ぐ。
 # 本家リポジトリは改変しない。
 name: hindsight
 
@@ -23,10 +24,10 @@ services:
       # 埋め込み（コンテナ内の SentenceTransformers、CPU）。
       # Hugging Face の名前（起動時にダウンロードして hf_cache に残る）か、models/fetch.sh で落とした /models/<名前>。
       # ruri-v3 や multilingual-e5 のように接頭辞が要るモデルは /models/ 側（fetch.sh が prompts を書き足す）で指す。
-      # local＝コンテナ内の SentenceTransformers。openai＝OpenAI 互換の口（下の ollama サービスなど）
+      # local＝コンテナ内の SentenceTransformers。openai＝OpenAI 互換の口（共有の ollama-docker など）
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: ${HINDSIGHT_API_EMBEDDINGS_PROVIDER:-local}
       HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: ${HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL:-BAAI/bge-m3}
-      # openai のとき（ollama を指す）。鍵は ollama が見ないが、空だと Hindsight が起動を拒むので埋め草
+      # openai のとき（ollama-docker の共有 ollama を指す。external network `ollama`、ホスト名 `ollama`）。鍵は ollama が見ないが、空だと Hindsight が起動を拒むので埋め草
       HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://ollama:11434/v1}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY:-ollama}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL:-qwen3-embedding:0.6b-q8_0}
@@ -60,38 +61,15 @@ services:
       - ./models:/models:ro
     networks:
       - postgresql
-      - default          # ollama と話す内部 network（下）
+      - ollama           # ollama-docker の共有 ollama（external network `ollama`）
     # 箱のほかのサービスを守る安全弁（bge-m3 は fp32 で約 2.3GB をメモリに載せる）
     mem_limit: 6g
-
-  # 量子化した埋め込みモデル（GGUF）を動かす ollama。公式イメージ ollama/ollama、版は .env の OLLAMA_VERSION。
-  # Hindsight からは openai プロバイダ（OpenAI 互換 /v1/embeddings）で http://ollama:11434/v1 を指す。
-  # profile `ollama` で切り替え: COMPOSE_PROFILES=ollama docker compose up -d（.env に書いてもよい）。
-  # 既定（profile なし）では上がらず、Hindsight はコンテナ内の local（SentenceTransformers）で埋め込む。
-  ollama:
-    image: ollama/ollama:${OLLAMA_VERSION:-0.40.5}
-    container_name: ollama
-    profiles: ["ollama"]
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:11434:11434"   # ホストからの確認用（curl、ollama pull は exec で足りる）。外には開けない
-    environment:
-      # 使わないモデルをメモリから下ろすまでの時間。-1＝下ろさない（recall のたびに読み直さないよう常駐）
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
-      OLLAMA_MAX_LOADED_MODELS: "1"
-      OLLAMA_NUM_PARALLEL: "1"
-    volumes:
-      - ollama:/root/.ollama    # 落としたモデル（hindsight_ollama）。-v を付けなければ残る
-    networks:
-      - default
-    mem_limit: 3g
 
 networks:
   postgresql:
     external: true
-  default:
-    # hindsight と ollama だけの内部 network（hindsight_default）。ほかの compose からは参照しない
+  ollama:
+    external: true
 
 volumes:
   hf_cache:
-  ollama:

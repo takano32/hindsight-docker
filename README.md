@@ -6,6 +6,7 @@
 ## 前提
 
 - `~/opt/postgresql-docker` が `up` していること（network `postgresql` と、hindsight のロールとデータベース）。
+- `~/opt/ollama-docker` が `up` していること（network `ollama`。埋め込みを `local` で動かすときも、compose が network を参照するので要る）。
 - `.env`（chmod 600）の `HINDSIGHT_DB_PASSWORD` が postgresql-docker の `.env` と同じ値。
 
 ## 使い方
@@ -23,28 +24,25 @@ docker compose down                  # -v を付けなければモデルのキ�
   Claude Code に足すなら `claude mcp add --transport http hindsight http://127.0.0.1:8888/mcp/<bank>/`。
 - モデルのキャッシュは名前付きボリューム `hindsight_hf_cache`（コンテナ内 `/home/hindsight/.cache/huggingface`）。
 
-## 量子化した埋め込みモデルを ollama で動かす（profile `ollama`）
+## 量子化した埋め込みモデルを ollama で動かす
 
-同じ compose に [ollama](https://github.com/ollama/ollama) の公式イメージを2つ目のサービスとして置いてある（版は `.env` の `OLLAMA_VERSION`、既定 0.40.5、arm64 あり）。
-GGUF の量子化モデル（Q8_0 など）を動かし、Hindsight は `openai` プロバイダ（OpenAI 互換 `/v1/embeddings`）で `http://ollama:11434/v1` を指す。
-2つは hindsight と ollama だけの内部 network（`hindsight_default`）で話す。ollama のポートはホストの `127.0.0.1:11434` だけに出している（確認用。外には開けない）。
+ollama は [ollama-docker](https://github.com/takano32/ollama-docker)（箱に1台の共有 ollama）に置いてある。
+GGUF の量子化モデル（Q8_0 など）をそこで動かし、Hindsight は `openai` プロバイダ（OpenAI 互換 `/v1/embeddings`）で
+`http://ollama:11434/v1` を指す（external network `ollama`、ホスト名 `ollama`）。
+ollama の版・常駐の設定・メモリ上限は ollama-docker の `.env` で決める。
 
 ```sh
-# .env に
-#   COMPOSE_PROFILES=ollama
+# hindsight-docker の .env に
 #   HINDSIGHT_API_EMBEDDINGS_PROVIDER=openai
 #   HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL=embeddinggemma:300m-qat-q8_0
 #   HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX=task: search result | query: 
 #   HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX=title: none | text: 
-docker compose up -d ollama
-docker compose exec ollama ollama pull embeddinggemma:300m-qat-q8_0     # 338MB、この箱で 69 秒。Gemma の同意手続きは要らなかった
+(cd ~/opt/ollama-docker && docker compose up -d && docker compose exec ollama ollama pull embeddinggemma:300m-qat-q8_0)
 docker compose up -d                                                    # hindsight が ollama に繋ぐ
 curl -s http://127.0.0.1:8888/health
 ```
 
-- **profile にしてある理由**＝ollama を使わない構成（`local`）のときに空のコンテナを上げないため。使うときは `.env` の `COMPOSE_PROFILES=ollama` で常に一緒に上がる。
-- モデルは名前付きボリューム `hindsight_ollama`（コンテナ内 `/root/.ollama`）。`down` に `-v` を付けなければ残る。要らないモデルは `docker compose exec ollama ollama rm <タグ>`。
-- `OLLAMA_KEEP_ALIVE` は既定 `-1`（モデルを下ろさない）。下ろすと次の recall で読み直し（embeddinggemma Q8 で 2 秒、Qwen3 0.6B Q8 で 2 秒、4B Q4 で数十秒）が挟まる。
+- 2026-10-16 までは同じ compose に2つ目のサービス（profile `ollama`）として置いていた。ほかのサービスとも使い回せるよう ollama-docker に分けた。
 - 接頭辞は `openai` プロバイダに効く（`local` には効かない）。モデルのカードが求める形をそのまま入れる。
   Qwen3-Embedding は問いだけ `Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:`（改行を含む。compose の文字列で `\n` と書く）。
 - 次元が pgvector の HNSW 上限 2000 を超えるモデル（Qwen3-Embedding-4B の 2560 など）は `HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS` で MRL の切り詰めを頼める（ollama 0.40.5 の `/v1/embeddings` は `dimensions` を受けた。切り詰めた質はモデルのカードを見る）。
@@ -86,10 +84,7 @@ recall は1問の中央値、メモリは待機時の hindsight＋ollama（`dock
 | `HINDSIGHT_API_RERANKER_PROVIDER` | 融合後の並べ替え。`rrf` は並べ替えなし（モデルを読まない）。`local` の既定モデルは英語専用 | `rrf` |
 | `HINDSIGHT_API_RERANKER_LOCAL_MODEL` | `local` のときのモデル。Hindsight 既定の `cross-encoder/ms-marco-MiniLM-L-6-v2` は英語専用で日本語の順位を壊す。多言語は `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`（約 470MB、recall が 0.13 秒→1.0 秒） | Hindsight 既定 |
 | `HINDSIGHT_ENABLE_CP` | 管理 UI（port 9999） | `true` |
-| `COMPOSE_PROFILES` | `ollama` を書くと ollama サービスも一緒に上がる | （なし） |
-| `OLLAMA_VERSION` | ollama イメージのタグ | `0.40.5` |
-| `OLLAMA_KEEP_ALIVE` | ollama がモデルをメモリから下ろすまでの時間。`-1` は下ろさない | `-1` |
-| `HINDSIGHT_API_EMBEDDINGS_PROVIDER` | `local`（コンテナ内 SentenceTransformers）か `openai`（OpenAI 互換の口＝ollama） | `local` |
+| `HINDSIGHT_API_EMBEDDINGS_PROVIDER` | `local`（コンテナ内 SentenceTransformers）か `openai`（OpenAI 互換の口＝ollama-docker） | `local` |
 | `HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL` | `openai` のときの口 | `http://ollama:11434/v1` |
 | `HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL` | `openai` のときのモデル（ollama のタグ） | `qwen3-embedding:0.6b-q8_0` |
 | `HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS` | 出力次元の切り詰め（MRL 対応モデルのみ） | （なし＝モデルの既定） |
