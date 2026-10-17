@@ -23,6 +23,8 @@ services:
       # ollama のとき（ollama-docker の共有 ollama。external network `ollama`、ホスト名 `ollama`）。モデルは ollama pull 済みのタグ
       HINDSIGHT_API_LLM_BASE_URL: ${HINDSIGHT_API_LLM_BASE_URL:-http://ollama:11434/v1}
       HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-qwen3:1.7b}
+      # claude-code のとき＝`claude setup-token` のトークン（.env にだけ置く。CLI は CLAUDE_CODE_OAUTH_TOKEN として受け取る）
+      HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:-}
 
       # 埋め込み（コンテナ内の SentenceTransformers、CPU）。
       # Hugging Face の名前（起動時にダウンロードして hf_cache に残る）か、models/fetch.sh で落とした /models/<名前>。
