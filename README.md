@@ -15,13 +15,13 @@
 cd ~/opt/hindsight-docker
 docker compose up -d
 docker compose logs -f hindsight     # 初回は埋め込みモデル（bge-m3 約 2.3GB）のダウンロードで数分かかる
-curl -s http://127.0.0.1:8888/health
+curl -s http://127.0.0.1:18888/health
 docker compose down                  # -v を付けなければモデルのキャッシュは残る
 ```
 
-- API: `http://127.0.0.1:8888`（OpenAPI は `/docs`）。管理 UI: `http://127.0.0.1:9999`。
-- MCP: `http://127.0.0.1:8888/mcp/{bank_id}/`（streamable HTTP、既定で認証なし。ポートは 127.0.0.1 だけに開けている）。
-  Claude Code に足すなら `claude mcp add --transport http hindsight http://127.0.0.1:8888/mcp/<bank>/`。
+- API: `http://127.0.0.1:18888`（OpenAPI は `/docs`）。管理 UI: `http://127.0.0.1:9999`。
+- MCP: `http://127.0.0.1:18888/mcp/{bank_id}/`（streamable HTTP、既定で認証なし。ポートは 127.0.0.1 だけに開けている）。
+  Claude Code に足すなら `claude mcp add --transport http hindsight http://127.0.0.1:18888/mcp/<bank>/`。
 - モデルのキャッシュは名前付きボリューム `hindsight_hf_cache`（コンテナ内 `/home/hindsight/.cache/huggingface`）。
 
 ## 量子化した埋め込みモデルを ollama で動かす
@@ -40,7 +40,7 @@ GGUF の量子化モデル（Q8_0 など）をそこで動かし、Hindsight は
 #   HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY=0.3    # ollama の尺度では既定の 0.3 のまま（llama-server なら 0.43）
 (cd ~/opt/ollama-docker && docker compose up -d && docker compose exec ollama ollama pull embeddinggemma:300m-qat-q8_0)   # 初回は 338MB
 docker compose up -d                                          # hindsight が ollama に繋ぐ
-curl -s http://127.0.0.1:8888/health
+curl -s http://127.0.0.1:18888/health
 ```
 
 - 2026-10-16 の昼までは同じ compose に2つ目のサービス（profile `ollama`）として置き、夕方に ollama-docker へ分け、

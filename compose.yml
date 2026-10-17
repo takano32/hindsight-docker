@@ -10,7 +10,7 @@ services:
     container_name: hindsight
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8888:8888"   # API と MCP（/mcp/{bank_id}/）
+      - "127.0.0.1:18888:8888"  # API と MCP（ホスト側は 18888）（/mcp/{bank_id}/）
       - "127.0.0.1:9999:9999"   # 管理 UI（HINDSIGHT_ENABLE_CP=true のとき）
     environment:
       # 共有 PostgreSQL の中の hindsight データベース（vector と pgroonga は postgresql-docker 側で作成済み）
@@ -20,6 +20,9 @@ services:
 
       # 書き込み時の LLM。none＝抽出なし（原文の塊だけ保存、API キー不要）
       HINDSIGHT_API_LLM_PROVIDER: ${HINDSIGHT_API_LLM_PROVIDER:-none}
+      # ollama のとき（ollama-docker の共有 ollama。external network `ollama`、ホスト名 `ollama`）。モデルは ollama pull 済みのタグ
+      HINDSIGHT_API_LLM_BASE_URL: ${HINDSIGHT_API_LLM_BASE_URL:-http://ollama:11434/v1}
+      HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-qwen3:1.7b}
 
       # 埋め込み（コンテナ内の SentenceTransformers、CPU）。
       # Hugging Face の名前（起動時にダウンロードして hf_cache に残る）か、models/fetch.sh で落とした /models/<名前>。
