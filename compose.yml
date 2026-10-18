@@ -25,6 +25,10 @@ services:
       HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-qwen3:1.7b}
       # claude-code のとき＝`claude setup-token` のトークン（.env にだけ置く。CLI は CLAUDE_CODE_OAUTH_TOKEN として受け取る）
       HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:-}
+      # LLM（Haiku）が落ちたときの非同期タスクの再試行。既定は 3 回 × 60 秒＝約4分で retain が failed になり、その回の記憶が入らない。
+      # 既定値のまま上げておけるよう .env で上書きする（2026-10-18、坂本さんの bank を足すときに takano32「haiku が動かなかったときのことはケアして」）
+      HINDSIGHT_API_WORKER_MAX_RETRIES: ${HINDSIGHT_API_WORKER_MAX_RETRIES:-3}
+      HINDSIGHT_API_WORKER_TASK_RETRY_BACKOFF_SECONDS: ${HINDSIGHT_API_WORKER_TASK_RETRY_BACKOFF_SECONDS:-60}
 
       # 埋め込み（コンテナ内の SentenceTransformers、CPU）。
       # Hugging Face の名前（起動時にダウンロードして hf_cache に残る）か、models/fetch.sh で落とした /models/<名前>。
