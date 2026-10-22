@@ -29,6 +29,10 @@ services:
       # 既定値のまま上げておけるよう .env で上書きする（2026-10-18、坂本さんの bank を足すときに takano32「haiku が動かなかったときのことはケアして」）
       HINDSIGHT_API_WORKER_MAX_RETRIES: ${HINDSIGHT_API_WORKER_MAX_RETRIES:-3}
       HINDSIGHT_API_WORKER_TASK_RETRY_BACKOFF_SECONDS: ${HINDSIGHT_API_WORKER_TASK_RETRY_BACKOFF_SECONDS:-60}
+      # 同時に走らせる処理の数。既定（スロット10・LLM 32）は 2 vCPU の箱では多すぎる＝LLM（claude CLI を起こす）と埋め込みが CPU を取り合って、
+      # 1件が 300 秒を越える（2026-10-22 に先送り分が一斉に動いて、埋め込みだけで 287 秒、10分で7件しか進まなかった）。.env で上書きする
+      HINDSIGHT_API_WORKER_MAX_SLOTS: ${HINDSIGHT_API_WORKER_MAX_SLOTS:-10}
+      HINDSIGHT_API_LLM_MAX_CONCURRENT: ${HINDSIGHT_API_LLM_MAX_CONCURRENT:-32}
 
       # 埋め込み（コンテナ内の SentenceTransformers、CPU）。
       # Hugging Face の名前（起動時にダウンロードして hf_cache に残る）か、models/fetch.sh で落とした /models/<名前>。
