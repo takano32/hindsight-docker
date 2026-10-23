@@ -1,6 +1,5 @@
 # Hindsight（ghcr.io/vectorize-io/hindsight の公式イメージ、版は .env の HINDSIGHT_VERSION）。
 # DB は同梱せず、postgresql-docker の共有 PostgreSQL（external network `postgresql`、ホスト名 `postgresql`）に繋ぐ。
-# 量子化した埋め込みモデルは ollama-docker の共有 ollama（external network `ollama`、ホスト名 `ollama`）に繋ぐ。
 # 本家リポジトリは改変しない。
 name: hindsight
 
@@ -76,14 +75,11 @@ services:
       - ./models:/models:ro
     networks:
       - postgresql
-      - ollama           # ollama-docker の共有 ollama（external network `ollama`）
     # 箱のほかのサービスを守る安全弁（bge-m3 は fp32 で約 2.3GB をメモリに載せる）
     mem_limit: 6g
 
 networks:
   postgresql:
-    external: true
-  ollama:
     external: true
 
 volumes:
