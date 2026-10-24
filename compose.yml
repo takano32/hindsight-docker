@@ -39,6 +39,9 @@ services:
       # local＝コンテナ内の SentenceTransformers。openai＝OpenAI 互換の口（共有の ollama-docker など）
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: ${HINDSIGHT_API_EMBEDDINGS_PROVIDER:-local}
       HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: ${HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL:-BAAI/bge-m3}
+      # 起動時に Hugging Face へ通信しない（hf_cache だけで読む）。2026-10-24 のリブート後、HF への接続が CLOSE_WAIT のまま
+      # 15分固まって起動が進まなかった（takano32「足そうかな」）。モデルを差し替えるときは .env で 0 にして一度落とし直す
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
       # openai のとき（ollama-docker の共有 ollama を指す。external network `ollama`、ホスト名 `ollama`）。
       # 鍵は ollama が見ないが、空だと Hindsight が起動を拒むので埋め草。モデル名は ollama のタグ（既定 embeddinggemma:300m-qat-q8_0、ollama pull 済みのもの）
       HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://ollama:11434/v1}
