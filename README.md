@@ -6,7 +6,7 @@
 ## 前提
 
 - `~/opt/postgresql-docker` が `up` していること（network `postgresql` と、hindsight のロールとデータベース）。
-- `~/opt/ollama-docker` が `up` していること（network `ollama`。埋め込みを `local` で動かすときも、compose が network を参照するので要る）。
+- `~/opt/llama-docker` が `up` していること（network `llama`。埋め込みを `local` で動かすときも、compose が network を参照するので要る）。2026-10-30 までは `~/opt/ollama-docker`（network `ollama`）だった。
 - `.env`（chmod 600）の `HINDSIGHT_DB_PASSWORD` が postgresql-docker の `.env` と同じ値。
 
 ## 使い方
@@ -24,7 +24,22 @@ docker compose down                  # -v を付けなければモデルのキ�
   Claude Code に足すなら `claude mcp add --transport http hindsight http://127.0.0.1:18888/mcp/<bank>/`。
 - モデルのキャッシュは名前付きボリューム `hindsight_hf_cache`（コンテナ内 `/home/hindsight/.cache/huggingface`）。
 
-## 量子化した埋め込みモデルを ollama で動かす
+## 埋め込みは llama-docker の共有埋め込みサーバー（2026-10-30 から）
+
+埋め込みは [llama-docker](https://github.com/takano32/llama-docker) の `llama-embed`（bge-m3、1024次元、1入力 8192 トークンまで）を、
+`openai` プロバイダで `http://llama-embed:8080/v1` に向けて引く（external network `llama`、ホスト名 `llama-embed`）。compose の既定がこの向きで、
+`.env` は `HINDSIGHT_API_EMBEDDINGS_PROVIDER=openai`、`HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL=bge-m3` だけ（2026-10-30 に ollama から切り替えた。takano32「切り替えだよ、こりゃ」）。
+重みは ollama の `bge-m3:latest` と同じファイルで、ベクトルは 2048 トークン以下で一致を確かめてある（llama-docker の README）。だから足切り 0.3 も既存の記憶もそのまま。
+
+注意：
+- Hindsight の OpenAI 互換の埋め込みはタイムアウトが 60 秒で固定（コンテナ内の `hindsight_api/engine/embeddings.py` の `OpenAIEmbeddings(timeout=60.0)`。
+  作るところ（`create_embeddings_from_env` の `openai` の分岐）が `timeout` を渡さず、環境変数も無い）。llama-embed は長文が遅い（約2000トークンで約60秒）ので、
+  長い入力や重いバッチ（`HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE`、既定 16）は切れうる。再試行の回数は `HINDSIGHT_API_EMBEDDINGS_MAX_RETRIES`（既定 4）だが、時間切れが再試行に回るかは確かめていない。
+- 戻すとき（ollama に）は llama-docker の README の「戻し方」。このリポは compose の向き先の変更（3eb8472）を revert する。
+
+以下は ollama を使っていたころの記録。
+
+## 量子化した埋め込みモデルを ollama で動かす（2026-10-30 まで）
 
 ollama は [ollama-docker](https://github.com/takano32/ollama-docker)（箱に1台の共有 ollama）に置いてある。
 GGUF の量子化モデル（Q8_0 など）をそこで動かし、Hindsight は `openai` プロバイダ（OpenAI 互換 `/v1/embeddings`）で
@@ -39,7 +54,7 @@ GGUF の量子化モデル（Q8_0 など）をそこで動かし、Hindsight は
 #   HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX=title: none | text: 
 #   HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY=0.3    # ollama の尺度では既定の 0.3 のまま（llama-server なら 0.43）
 (cd ~/opt/ollama-docker && docker compose up -d && docker compose exec ollama ollama pull embeddinggemma:300m-qat-q8_0)   # 初回は 338MB
-docker compose up -d                                          # hindsight が ollama に繋ぐ
+docker compose up -d                                          # hindsight が ollama に繋ぐ（いまの compose は network llama なので、ollama に戻すなら compose も戻す）
 curl -s http://127.0.0.1:18888/health
 ```
 
@@ -106,8 +121,8 @@ recall は1問の中央値、メモリは待機時の hindsight＋ollama（`dock
 | `HINDSIGHT_API_RERANKER_PROVIDER` | 融合後の並べ替え。`rrf` は並べ替えなし（モデルを読まない）。`local` の既定モデルは英語専用 | `rrf` |
 | `HINDSIGHT_API_RERANKER_LOCAL_MODEL` | `local` のときのモデル。Hindsight 既定の `cross-encoder/ms-marco-MiniLM-L-6-v2` は英語専用で日本語の順位を壊す。多言語は `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`（約 470MB、recall が 0.13 秒→1.0 秒） | Hindsight 既定 |
 | `HINDSIGHT_ENABLE_CP` | 管理 UI（port 9999） | `true` |
-| `HINDSIGHT_API_EMBEDDINGS_PROVIDER` | `local`（コンテナ内 SentenceTransformers）か `openai`（OpenAI 互換の口＝ollama-docker） | `local` |
-| `HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL` | `openai` のときの口 | `http://ollama:11434/v1` |
+| `HINDSIGHT_API_EMBEDDINGS_PROVIDER` | `local`（コンテナ内 SentenceTransformers）か `openai`（OpenAI 互換の口＝llama-docker の llama-embed） | `local` |
+| `HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL` | `openai` のときの口 | `http://llama-embed:8080/v1`（2026-10-30 までは `http://ollama:11434/v1`） |
 | `HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL` | `openai` のときのモデル（ollama のタグ） | `embeddinggemma:300m-qat-q8_0` |
 | `HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS` | 出力次元の切り詰め（MRL 対応モデルのみ） | （なし＝モデルの既定） |
 | `HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX`／`PASSAGE_PREFIX` | 問い／文書の接頭辞（`openai`・`tei` 系にだけ効く） | （空） |
