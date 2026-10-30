@@ -1,0 +1,44 @@
+# 試験用の Hindsight（本番の hindsight とは別の名前・ポート・DB）。
+# hindsight_standby_test（本番 DB の複製）に向け、埋め込みを Sarashina に、印を接頭辞で付けて立てる。
+#   docker compose -f standby/compose.test.yml up -d / down
+# 外へ書かないように: LLM は none、ワーカー無効（非同期タスクを拾わない）、管理 UI なし、自動統合なし。
+# 使う前に、試験用 DB の async_operations の pending/processing を cancelled にしておく（README.md）。
+name: hindsight-standby-test
+
+services:
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:${HINDSIGHT_VERSION:-1.1.0}
+    container_name: hindsight-standby-test
+    restart: "no"
+    ports:
+      - "127.0.0.1:18889:8888"
+    environment:
+      HINDSIGHT_API_DATABASE_URL: postgresql://${HINDSIGHT_DB_USER:-hindsight}:${HINDSIGHT_DB_PASSWORD:?.env に HINDSIGHT_DB_PASSWORD を書く}@postgresql:5432/${STANDBY_TEST_DB:-hindsight_standby_test}
+      HINDSIGHT_API_VECTOR_EXTENSION: pgvector
+      HINDSIGHT_API_TEXT_SEARCH_EXTENSION: pgroonga
+      HINDSIGHT_API_LLM_PROVIDER: none
+      HINDSIGHT_API_WORKER_ENABLED: "false"
+      HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION: "false"
+      HINDSIGHT_API_ENABLE_OBSERVATIONS: "false"
+      HINDSIGHT_ENABLE_CP: "false"
+      HINDSIGHT_API_EMBEDDINGS_PROVIDER: openai
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: http://sarashina-embed:8080/v1
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: none
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: sarashina3-embedding
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE: "8"
+      HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX: "[[sarashina:query]]"
+      HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX: "[[sarashina:document]]"
+      HINDSIGHT_API_SEMANTIC_MIN_SIMILARITY: ${STANDBY_TEST_MIN_SIM:-0.3}
+      HINDSIGHT_API_RERANKER_PROVIDER: rrf
+      HF_HUB_OFFLINE: "1"
+      HINDSIGHT_API_MODEL_INIT_TIMEOUT: "300"
+    networks:
+      - postgresql
+      - sarashina
+    mem_limit: 2g
+
+networks:
+  postgresql:
+    external: true
+  sarashina:
+    external: true
