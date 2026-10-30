@@ -45,9 +45,10 @@ services:
       # 起動時に Hugging Face へ通信しない（hf_cache だけで読む）。2026-10-24 のリブート後、HF への接続が CLOSE_WAIT のまま
       # 15分固まって起動が進まなかった（takano32「足そうかな」）。モデルを差し替えるときは .env で 0 にして一度落とし直す
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
-      # openai のとき（ollama-docker の共有 ollama を指す。external network `ollama`、ホスト名 `ollama`）。
-      # 鍵は ollama が見ないが、空だと Hindsight が起動を拒むので埋め草。モデル名は ollama のタグ（既定 embeddinggemma:300m-qat-q8_0、ollama pull 済みのもの）
-      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://ollama:11434/v1}
+      # openai のとき（llama-docker の共有埋め込みサーバー llama-embed を指す。external network `llama`、ホスト名 `llama-embed`）。
+      # 2026-10-30 に ollama-docker の ollama（http://ollama:11434/v1）から切り替えた（同じ bge-m3 の重みで、ベクトルは一致を確かめ済み）。
+      # 鍵はサーバーが見ないが、空だと Hindsight が起動を拒むので埋め草。モデル名は llama-embed の --alias（いまは bge-m3。.env で指定）
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://llama-embed:8080/v1}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY:-none}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL:-embeddinggemma:300m-qat-q8_0}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE:-16}
@@ -81,15 +82,15 @@ services:
       - ./models:/models:ro
     networks:
       - postgresql
-      - ollama
+      - llama
     # 箱のほかのサービスを守る安全弁（bge-m3 は fp32 で約 2.3GB をメモリに載せる）
     mem_limit: 6g
 
 networks:
   postgresql:
     external: true
-  # 埋め込み（bge-m3）は ollama-docker の共有 ollama（ホスト名 `ollama`）。honcho-docker と1つを共有する
-  ollama:
+  # 埋め込み（bge-m3）は llama-docker の共有埋め込みサーバー（ホスト名 `llama-embed`）。honcho-docker と1つを共有する
+  llama:
     external: true
 
 volumes:
