@@ -1,3 +1,4 @@
 .env
 models/*
 !models/fetch.sh
+__pycache__/

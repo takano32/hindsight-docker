@@ -5,7 +5,8 @@
   既定は dry-run（前提の点検と計画を出して終わる。何も書かない）。--apply で初めて動く。
 
   forward（bge-m3 → Sarashina）:
-    ./run.sh switch.py --db NAME --from-model bge-m3 --to-model sarashina3-embedding [--apply]
+    ./run.sh switch.py --db NAME --from-model bge-m3 --to-model sarashina3-embedding --register-active [--apply]
+    （--register-active は、meta に「列に入っているモデル名」の記録がまだ無い最初の1回だけ。2回目からは meta と照合する）
   back（戻す）:
     ./run.sh switch.py --db NAME --from-model sarashina3-embedding --to-model bge-m3 \
         --from-passage-prefix '[[sarashina:document]]' --from-query-prefix '[[sarashina:query]]' [--apply]
@@ -52,10 +53,10 @@ def fetch_state(conn, a):
     st["column_typmod"] = cur.fetchone()[0]
     cur.execute("SELECT DISTINCT dim, source FROM embedding_standby WHERE model=%s", (a.to_model,))
     st["to_dims_sources"] = sorted(cur.fetchall())
-    cur.execute("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()")
+    cur.execute("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND pid<>pg_backend_pid()")
     st["other_sessions"] = cur.fetchone()[0]
     cur.execute("SELECT coalesce(string_agg(DISTINCT coalesce(application_name,'')||'@'||coalesce(client_addr::text,'local'), ', '), '') "
-                "FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()")
+                "FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND pid<>pg_backend_pid()")
     st["other_sessions_who"] = cur.fetchone()[0]
     cur.execute("SELECT c.relname, t.relname, pg_get_indexdef(i.indexrelid) FROM pg_index i "
                 "JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_class t ON t.oid=i.indrelid "
@@ -95,6 +96,9 @@ def main() -> None:
     ap.add_argument("--discard-mental-model-embeddings", action="store_true")
     ap.add_argument("--maintenance-work-mem", default="512MB")
     ap.add_argument("--lock-timeout", default="30s")
+    ap.add_argument("--parallel-workers", type=int, default=0,
+                    help="HNSW 構築の並列ワーカー数（SET LOCAL）。既定 0＝並列なし。postgres コンテナの /dev/shm は 64MB で、"
+                         "並列構築が maintenance_work_mem ぶんの共有メモリを取って DiskFull になる（2026-10-30 の試験で実際に落ちた）")
     ap.add_argument("--json", action="store_true", help="最後に計時を JSON で出す")
     a = ap.parse_args()
     if a.from_model == a.to_model:
@@ -181,6 +185,7 @@ def main() -> None:
     try:
         cur.execute(sql.SQL("SET LOCAL lock_timeout = {}").format(sql.Literal(a.lock_timeout)))
         cur.execute(sql.SQL("SET LOCAL maintenance_work_mem = {}").format(sql.Literal(a.maintenance_work_mem)))
+        cur.execute(sql.SQL("SET LOCAL max_parallel_maintenance_workers = {}").format(sql.SQL(str(a.parallel_workers))))
         with step("lock"):
             cur.execute("LOCK TABLE public.memory_units, public.mental_models IN ACCESS EXCLUSIVE MODE")
         # ロックの下でもう一度、控えの網羅を確かめる
@@ -196,7 +201,9 @@ def main() -> None:
                 "SELECT m.id, %s, m.embedding, vector_dims(m.embedding), h.h, 'swap-backup', now() "
                 "FROM memory_units m JOIN _swap_hash h ON h.id=m.id WHERE m.embedding IS NOT NULL "
                 "ON CONFLICT (unit_id, model) DO UPDATE SET embedding=EXCLUDED.embedding, dim=EXCLUDED.dim, "
-                "text_hash=EXCLUDED.text_hash, source='swap-backup', embedded_at=now()", (a.from_model,))
+                "text_hash=EXCLUDED.text_hash, embedded_at=now(), "
+                "source=CASE WHEN embedding_standby.source='synthetic' AND embedding_standby.embedding = EXCLUDED.embedding "
+                "THEN 'synthetic' ELSE 'swap-backup' END", (a.from_model,))
             n_backup = cur.rowcount
             cur_dim = st["current_dims"][0] if st["current_dims"] else (st["column_typmod"] if st["column_typmod"] > 0 else 0)
             cur.execute(
