@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """検索の質（1）: 同じ候補集合（Sarashina で埋めた無作為の n 件）の中で、bge-m3 と Sarashina の上位10件を出し、重なりを測る。
 bge-m3 側＝memory_units.embedding にある既存ベクトル（本番が retain で埋めたもの）、問いは llama-embed で埋める。
-Sarashina 側＝embedding_standby の控え、問いは接頭辞 [[sarashina:query]] で埋める。
+Sarashina 側＝memory_units_standby の控え、問いは接頭辞 [[sarashina:query]] で埋める。
 読むだけ（DB に書かない）。Jev の判定用に問いと候補の本文を JSON に出す（scratchpad へ。リポジトリには置かない）。
 
   STANDBY_MOUNTS="/path/in:/in:ro /path/out:/out" ./run.sh bench/quality_collect.py --db hindsight_standby_test \
@@ -32,7 +32,7 @@ def main():
     conn = common.connect(a.db, production=a.production)
     cur = conn.cursor()
     cur.execute("SELECT m.id::text, m.fact_type, m.text, m.embedding::text, s.embedding::text "
-                "FROM embedding_standby s JOIN memory_units m ON m.id=s.unit_id "
+                "FROM memory_units_standby s JOIN memory_units m ON m.id=s.unit_id "
                 "WHERE s.model=%s AND s.source='filler' AND m.embedding IS NOT NULL ORDER BY m.id", (a.sarashina_model,))
     ids, fts, texts, B, S = [], [], [], [], []
     for i, ft, t, be, se in cur:

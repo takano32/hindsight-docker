@@ -4,7 +4,7 @@
 -- 控えのベクトル。モデルごとに1行（同じ unit_id で bge-m3 と sarashina を別々に持てる）。
 -- FK は張らない（memory_units への削除・更新の負担にしない。消えた行は filler が掃除する）。
 -- embedding は次元なしの vector（モデルごとに次元が違う）。HNSW は張らない（切り替えのとき memory_units 側に作る）。
-CREATE TABLE IF NOT EXISTS embedding_standby (
+CREATE TABLE IF NOT EXISTS memory_units_standby (
     unit_id     uuid        NOT NULL,
     model       text        NOT NULL,
     embedding   vector      NOT NULL,
@@ -18,10 +18,10 @@ CREATE TABLE IF NOT EXISTS embedding_standby (
     embedded_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (unit_id, model)
 );
-CREATE INDEX IF NOT EXISTS embedding_standby_model_idx ON embedding_standby (model);
+CREATE INDEX IF NOT EXISTS memory_units_standby_model_idx ON memory_units_standby (model);
 
 -- モデルごとの設定（filler が最初に登録する）。接頭辞が食い違ったまま埋めると混ざるので、filler は食い違いを拒む。
-CREATE TABLE IF NOT EXISTS embedding_standby_models (
+CREATE TABLE IF NOT EXISTS memory_units_standby_models (
     model          text PRIMARY KEY,
     dim            integer NOT NULL,
     passage_prefix text    NOT NULL DEFAULT '',
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS embedding_standby_models (
 );
 
 -- いま memory_units.embedding に入っているモデル（active_model）と、直近の入れ替えの記録。
-CREATE TABLE IF NOT EXISTS embedding_standby_meta (
+CREATE TABLE IF NOT EXISTS memory_units_standby_meta (
     key        text PRIMARY KEY,
     value      text NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now()

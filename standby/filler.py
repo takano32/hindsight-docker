@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""控えのベクトルを embedding_standby に埋める（memory_units には書かない）。
+"""控えのベクトルを memory_units_standby に埋める（memory_units には書かない）。
 
   * memory_units を読み、retain と同じ文（common.augment）を作ってハッシュを取る。
-  * embedding_standby に（unit_id, model）の行が無い／ハッシュが違う行を、控えのモデルで埋める。
+  * memory_units_standby に（unit_id, model）の行が無い／ハッシュが違う行を、控えのモデルで埋める。
   * 1バッチごとにコミットする＝止めても続きから再開できる。
   * memory_units に無い unit_id の控えは掃除する（--no-prune で止められる）。
   * --check は読むだけ（件数を出して終わる）。--dry-run は埋める行の数を出すだけで API も書き込みもしない。
@@ -24,7 +24,7 @@ from common import log
 
 def table_exists(conn) -> bool:
     with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('public.embedding_standby') IS NOT NULL")
+        cur.execute("SELECT to_regclass('public.memory_units_standby') IS NOT NULL")
         return cur.fetchone()[0]
 
 
@@ -45,7 +45,7 @@ def synthetic_vector(unit_id: str, dim: int) -> list[float]:
 
 def register_model(conn, args) -> None:
     with conn.cursor() as cur:
-        cur.execute("SELECT passage_prefix, query_prefix, dim FROM embedding_standby_models WHERE model=%s", (args.model,))
+        cur.execute("SELECT passage_prefix, query_prefix, dim FROM memory_units_standby_models WHERE model=%s", (args.model,))
         row = cur.fetchone()
         if row:
             if row[0] != args.passage_prefix or row[1] != args.query_prefix:
@@ -55,7 +55,7 @@ def register_model(conn, args) -> None:
                 sys.exit(f"model {args.model} の dim が登録（{row[2]}）と違う")
         else:
             cur.execute(
-                "INSERT INTO embedding_standby_models (model, dim, passage_prefix, query_prefix, base_url, note) "
+                "INSERT INTO memory_units_standby_models (model, dim, passage_prefix, query_prefix, base_url, note) "
                 "VALUES (%s,%s,%s,%s,%s,%s)",
                 (args.model, args.dim or 0, args.passage_prefix, args.query_prefix, args.base_url, args.note))
     conn.commit()
@@ -70,7 +70,7 @@ def run_once(args) -> dict:
         have: dict[str, str] = {}
         if table_exists(conn):
             with conn.cursor() as cur:
-                cur.execute("SELECT unit_id::text, text_hash FROM embedding_standby WHERE model=%s", (args.model,))
+                cur.execute("SELECT unit_id::text, text_hash FROM memory_units_standby WHERE model=%s", (args.model,))
                 have = dict(cur.fetchall())
         elif not args.check and not args.dry_run:
             common.ensure_schema(conn)
@@ -88,7 +88,7 @@ def run_once(args) -> dict:
         stat["todo"] = len(todo)
         with conn.cursor() as cur:  # 孤児（memory_units に無い控え）の数
             if table_exists(conn):
-                cur.execute("SELECT count(*) FROM embedding_standby s WHERE s.model=%s AND NOT EXISTS "
+                cur.execute("SELECT count(*) FROM memory_units_standby s WHERE s.model=%s AND NOT EXISTS "
                             "(SELECT 1 FROM memory_units m WHERE m.id=s.unit_id)", (args.model,))
                 stat["orphans"] = cur.fetchone()[0]
         log(f"model={args.model}: 対象 {stat['selected']}、最新 {stat['uptodate']}、埋める {stat['todo']}、孤児 {stat['orphans']}")
@@ -120,11 +120,11 @@ def run_once(args) -> dict:
                 import psycopg2.extras
                 psycopg2.extras.execute_values(
                     cur,
-                    "INSERT INTO embedding_standby (unit_id, model, embedding, dim, text_hash, source, embedded_at) "
+                    "INSERT INTO memory_units_standby (unit_id, model, embedding, dim, text_hash, source, embedded_at) "
                     "VALUES %s ON CONFLICT (unit_id, model) DO UPDATE SET embedding=EXCLUDED.embedding, "
                     "dim=EXCLUDED.dim, text_hash=EXCLUDED.text_hash, source=EXCLUDED.source, embedded_at=now()",
                     rows, template="(%s::uuid, %s, %s::vector, %s, %s, %s, now())")
-                cur.execute("UPDATE embedding_standby_models SET dim=%s WHERE model=%s AND dim<>%s", (dim, args.model, dim))
+                cur.execute("UPDATE memory_units_standby_models SET dim=%s WHERE model=%s AND dim<>%s", (dim, args.model, dim))
             conn.commit()
             i += len(chunk)
             stat["embedded"] += len(chunk)
@@ -132,7 +132,7 @@ def run_once(args) -> dict:
             log(f"  {min(i,len(todo))}/{len(todo)}（バッチ {time.time()-tb:.1f}s、累計 {el:.0f}s、残り約 {el/max(i,1)*max(len(todo)-i,0):.0f}s）")
         if not args.no_prune and not args.sample:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM embedding_standby s WHERE s.model=%s AND NOT EXISTS "
+                cur.execute("DELETE FROM memory_units_standby s WHERE s.model=%s AND NOT EXISTS "
                             "(SELECT 1 FROM memory_units m WHERE m.id=s.unit_id)", (args.model,))
                 stat["pruned"] = cur.rowcount
             conn.commit()

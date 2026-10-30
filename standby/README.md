@@ -1,14 +1,14 @@
 # 埋め込みのホットスタンバイ（別表方式）
 
 Hindsight の埋め込みモデルを入れ替えるとき、**全行を埋め直す時間（Sarashina は 60 回/分で約 6 時間）のあいだ Hindsight を止めない**ための仕組み。
-控えのベクトルを別表 `embedding_standby` に先に作っておき、止める時間は列の入れ替えだけ（試験用の複製で約 50 秒）にする。
+控えのベクトルを別表 `memory_units_standby` に先に作っておき、止める時間は列の入れ替えだけ（試験用の複製で約 50 秒）にする。
 2026-10-30 に作り、本番の複製（`hindsight_standby_test`）だけで試した。**本番 DB にはまだ何も流していない。**
 
 ## 構成
 
 | ファイル | 役割 |
 |---|---|
-| `schema.sql` | `embedding_standby`（控え。`(unit_id, model)` が主キー、次元なしの `vector`）、`embedding_standby_models`（モデルごとの接頭辞・次元）、`embedding_standby_meta`（`active_model`＝いま列に入っているモデル名） |
+| `schema.sql` | `memory_units_standby`（控え。`(unit_id, model)` が主キー、次元なしの `vector`）、`memory_units_standby_models`（モデルごとの接頭辞・次元）、`memory_units_standby_meta`（`active_model`＝いま列に入っているモデル名） |
 | `common.py` | DB 接続（DB 名は必須・本番名は `--production` が要る）、retain と同じ埋め込み文の組み立て、OpenAI 互換の `/embeddings` 呼び出し |
 | `filler.py` | 控えを埋める。`memory_units` を読むだけ。再開できる。孤児の掃除。`--check`（読むだけ）、`--dry-run`、`--sample`、`--interval` |
 | `switch.py` | `memory_units.embedding` と控えの入れ替え（forward も back も同じ）。既定は dry-run |
@@ -21,7 +21,7 @@ Hindsight の埋め込みモデルを入れ替えるとき、**全行を埋め�
 - fact（world / experience）: `本文 (happened in <Month Year>)` ＋ ` [実体名, ...]`（`engine/retain/embedding_processing.py` の `augment_texts_with_dates`、月年は `_format_readable_date` の `%B %Y`）。日付は `occurred_start`、無ければ `mentioned_at`。
 - observation: 本文だけ（`consolidator._embed_observation_texts`）。
 - 実体名は `memory_units` に順序つきでは残っていない。`unit_entities` の名前を、`text_signals`（retain のとき実体名を並べて残した列）の中の出現位置で並べ直す。
-- 接頭辞はハッシュに含めない（モデルごとに `embedding_standby_models` に登録し、食い違ったまま埋めるのを `filler.py` が拒む）。
+- 接頭辞はハッシュに含めない（モデルごとに `memory_units_standby_models` に登録し、食い違ったまま埋めるのを `filler.py` が拒む）。
 
 ### 入れ替えの手順（`switch.py --apply`、1トランザクション）
 
@@ -53,7 +53,7 @@ Hindsight の埋め込みモデルを入れ替えるとき、**全行を埋め�
 - 乱数ベクトルは HNSW に構造が無く、実データの構築時間とは違う（速いか遅いかは測っていない）。
 - 並列構築は `/dev/shm`（256MB）を `maintenance_work_mem` ぶん取って `DiskFull` で落ちた（最初の試行で実際に落ち、トランザクションごと元に戻った）。`switch.py` は既定で並列 0。
 - 箱の負荷（`bench/sysmon.sh`）: 切り替え中の load1 は最大 1.1〜3.2、メモリ空きは最小 7.4GB、スワップは 3.5GB のまま変化なし、postgres コンテナのメモリは最大約 960MiB。
-- `embedding_standby` の大きさは 2 モデルぶん（22,360 行ずつ）で 611MB。`memory_units` は 321MB。
+- `memory_units_standby` の大きさは 2 モデルぶん（22,360 行ずつ）で 611MB。`memory_units` は 321MB。
 
 ### 切り替え後の起動確認
 
@@ -113,4 +113,4 @@ LLM は none、ワーカー無効、自動統合なし。外へ出た通信は S
 - 実ベクトルで全行を入れ替えたときの HNSW 構築時間（乱数ベクトルでしか測っていない）。
 - 切り替え後の本番の recall の質と、床の値（22 問の推定）。
 - フックの Jev 判定には履歴（直前の会話）が付くが、質の測定では付けていない。
-- 本番 DB に `embedding_standby` を作ることの影響（表3つの追加と、filler の長い読み取りトランザクション。試験用でしか見ていない）。
+- 本番 DB に `memory_units_standby` を作ることの影響（表3つの追加と、filler の長い読み取りトランザクション。試験用でしか見ていない）。
